@@ -37,3 +37,15 @@ If the value you try to get exists, but the data types does not match, `err` wil
 ## Feedback is welcome
 
 Please create an issue if you find a typo or if you have other ideas how to improve this package.
+
+## Releasing
+
+```terminal
+go test ./...
+
+RELEASE_TAG=v0.0.X
+
+git tag $RELEASE_TAG
+
+git push origin $RELEASE_TAG
+```
