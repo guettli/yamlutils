@@ -6,56 +6,102 @@ import (
 	yaml "sigs.k8s.io/yaml/goyaml.v3"
 )
 
-func NestedString(n *yaml.Node, fields ...string) (s string, found bool, err error) {
-	current := n
+var nodeKindToString = map[yaml.Kind]string{
+	yaml.DocumentNode: "DocumentNode",
+	yaml.SequenceNode: "SequenceNode",
+	yaml.MappingNode:  "MappingNode",
+	yaml.ScalarNode:   "ScalarNode",
+	yaml.AliasNode:    "AliasNode",
+}
 
-	if n.Kind == yaml.DocumentNode {
-		if len(n.Content) != 1 {
-			return "", false, fmt.Errorf("expected a single document node, but got %d", len(n.Content))
-		}
-		current = n.Content[0]
+// NestedString traverses the given Node to find a nested string slice based on the provided fields.
+func NestedString(node *yaml.Node, fields ...string) (s string, found bool, err error) {
+	n, found, err := NestedNode(node, fields...)
+	if err != nil {
+		return "", false, err
+	}
+	if !found {
+		return "", false, nil
 	}
 
-	for _, field := range fields {
-		if current.Kind != yaml.MappingNode {
-			return "", false, fmt.Errorf("expected a mapping node at field '%s', but got kind %d", field, current.Kind)
-		}
-
-		found := false
-		for i := 0; i < len(current.Content); i += 2 {
-			keyNode := current.Content[i]
-			valueNode := current.Content[i+1]
-			if keyNode.Value == field {
-				current = valueNode
-				found = true
-				break
-			}
-		}
-
-		if !found {
-			return "", false, nil
-		}
+	if n.Kind != yaml.ScalarNode {
+		return "", false, fmt.Errorf("NestedString: expected a scalar node, but got kind %s: %q", nodeKindToString[n.Kind], n.Value)
 	}
 
-	if current.Kind != yaml.ScalarNode {
-		return "", false, fmt.Errorf("expected a scalar node, but got kind %d", current.Kind)
-	}
-
-	return current.Value, true, nil
+	return n.Value, true, nil
 }
 
 // NestedStringSlice traverses the given Node to find a nested string slice based on the provided fields.
-func NestedStringSlice(n *yaml.Node, fields ...string) ([]string, bool, error) {
+func NestedStringSlice(node *yaml.Node, fields ...string) ([]string, bool, error) {
+	n, found, err := NestedNode(node, fields...)
+	if err != nil {
+		return nil, false, err
+	}
+	if !found {
+		return nil, false, nil
+	}
+
+	if n.Kind != yaml.SequenceNode {
+		return nil, false, fmt.Errorf("NestedStringSlice: expected a sequence node, but got kind %s: %q", nodeKindToString[n.Kind], n.Value)
+	}
+
+	var result []string
+	for _, item := range n.Content {
+		if item.Kind != yaml.ScalarNode {
+			return nil, false, fmt.Errorf("NestedStringSlice: expected a scalar node in sequence, but got kind %s", nodeKindToString[item.Kind])
+		}
+		result = append(result, item.Value)
+	}
+
+	return result, true, nil
+}
+
+// NestedStringMap traverses the given Node to find a nested map[string]string based on the provided fields.
+func NestedStringMap(node *yaml.Node, fields ...string) (m map[string]string, found bool, err error) {
+	n, found, err := NestedNode(node, fields...)
+	if err != nil {
+		return nil, false, err
+	}
+	if !found {
+		return nil, false, nil
+	}
+
+	if n.Kind != yaml.MappingNode {
+		return nil, false, fmt.Errorf("NestedStringMap: expected a mapping node, but got kind %s", nodeKindToString[n.Kind])
+	}
+	if len(n.Content) == 0 {
+		return nil, true, nil
+	}
+	result := make(map[string]string)
+	for i := 0; i < len(n.Content); i += 2 {
+		keyNode := n.Content[i]
+		valueNode := n.Content[i+1]
+
+		if keyNode.Kind != yaml.ScalarNode || valueNode.Kind != yaml.ScalarNode {
+			return nil, false, fmt.Errorf("expected scalar nodes for key-value pair, but got key kind %s and value kind %s",
+				nodeKindToString[keyNode.Kind], nodeKindToString[valueNode.Kind])
+		}
+
+		result[keyNode.Value] = valueNode.Value
+	}
+
+	return result, true, nil
+}
+
+// NestedNode traverses the given Node to find the yaml.Node based on the provided fields.
+func NestedNode(n *yaml.Node, fields ...string) (node *yaml.Node, found bool, err error) {
 	current := n
+
 	if n.Kind == yaml.DocumentNode {
 		if len(n.Content) != 1 {
-			return nil, false, fmt.Errorf("expected a single document node, but got %d", len(n.Content))
+			return nil, false, fmt.Errorf("NestedNode: expected a single document node, but got %d", len(n.Content))
 		}
 		current = n.Content[0]
 	}
+
 	for _, field := range fields {
 		if current.Kind != yaml.MappingNode {
-			return nil, false, fmt.Errorf("expected a mapping node at field '%s', but got kind %d", field, current.Kind)
+			return nil, false, fmt.Errorf("NestedNode: expected a mapping node at field '%s', but got kind %s", field, nodeKindToString[current.Kind])
 		}
 
 		found := false
@@ -74,70 +120,5 @@ func NestedStringSlice(n *yaml.Node, fields ...string) ([]string, bool, error) {
 		}
 	}
 
-	if current.Kind != yaml.SequenceNode {
-		return nil, false, fmt.Errorf("expected a sequence node, but got kind %d: %q", current.Kind, current.Value)
-	}
-
-	var result []string
-	for _, item := range current.Content {
-		if item.Kind != yaml.ScalarNode {
-			return nil, false, fmt.Errorf("expected a scalar node in sequence, but got kind %d", item.Kind)
-		}
-		result = append(result, item.Value)
-	}
-
-	return result, true, nil
-}
-
-// NestedStringMap traverses the given Node to find a nested map[string]string based on the provided fields.
-func NestedStringMap(n *yaml.Node, fields ...string) (m map[string]string, found bool, err error) {
-	current := n
-	if n.Kind == yaml.DocumentNode {
-		if len(n.Content) != 1 {
-			return nil, false, fmt.Errorf("expected a single document node, but got %d", len(n.Content))
-		}
-		current = n.Content[0]
-	}
-
-	for _, field := range fields {
-		if current.Kind != yaml.MappingNode {
-			return nil, false, fmt.Errorf("expected a mapping node at field '%s', but got kind %d", field, current.Kind)
-		}
-
-		found := false
-		for i := 0; i < len(current.Content); i += 2 {
-			keyNode := current.Content[i]
-			valueNode := current.Content[i+1]
-			// fmt.Printf("keyNode: %+v valueNode %+v\n", keyNode, valueNode)
-			if keyNode.Value == field {
-				current = valueNode
-				found = true
-				break
-			}
-		}
-
-		if !found {
-			return nil, true, nil
-		}
-	}
-
-	if current.Kind != yaml.MappingNode {
-		return nil, false, fmt.Errorf("expected a mapping node, but got kind %d", current.Kind)
-	}
-	if len(current.Content) == 0 {
-		return nil, true, nil
-	}
-	result := make(map[string]string)
-	for i := 0; i < len(current.Content); i += 2 {
-		keyNode := current.Content[i]
-		valueNode := current.Content[i+1]
-
-		if keyNode.Kind != yaml.ScalarNode || valueNode.Kind != yaml.ScalarNode {
-			return nil, false, fmt.Errorf("expected scalar nodes for key-value pair, but got key kind %d and value kind %d", keyNode.Kind, valueNode.Kind)
-		}
-
-		result[keyNode.Value] = valueNode.Value
-	}
-
-	return result, false, nil
+	return current, true, nil
 }
